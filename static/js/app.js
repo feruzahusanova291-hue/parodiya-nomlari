@@ -12,7 +12,14 @@ document.addEventListener('DOMContentLoaded', () => {
         responseLength: 'short',
         apiKey: localStorage.getItem('gaslight_api_key') || '',
         baseUrl: localStorage.getItem('gaslight_base_url') || '',
-        model: localStorage.getItem('gaslight_model') || 'gemini-flash-lite-latest',
+        model: (function() {
+            let m = localStorage.getItem('gaslight_model') || '';
+            if (!m || m.includes('latest')) {
+                m = 'gemini-3.1-flash-lite';
+                localStorage.setItem('gaslight_model', m);
+            }
+            return m;
+        })(),
         language: localStorage.getItem('gaslight_lang') || 'uz',
         soundEnabled: localStorage.getItem('gaslight_sound') !== 'false',
         isGenerating: false,
@@ -204,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     envKeyStatus.textContent = `Faol (${engineName} .env orqali)`;
                     envKeyStatus.style.color = "var(--neon-green)";
                 } else if (state.apiKey) {
-                    if (state.apiKey.startsWith('AIza')) {
+                    if (state.apiKey.startsWith('AIza') || state.apiKey.startsWith('AQ.')) {
                         envKeyStatus.textContent = "Google Gemini kaliti kiritildi ✓";
                         envKeyStatus.style.color = "var(--neon-green)";
                     } else {
@@ -215,9 +222,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     envKeyStatus.textContent = "Offline Oracle Mode (Gemini yoki OpenAI kalitini kiriting)";
                     envKeyStatus.style.color = "var(--neon-cyan)";
                 }
+                return;
             }
         } catch (e) {
-            envKeyStatus.textContent = "Server ulangan";
+            // Static hosting (GitHub Pages)
+        }
+
+        if (state.apiKey) {
+            envKeyStatus.textContent = "GitHub Pages: Shaxsiy API kalit faol ✓";
+            envKeyStatus.style.color = "var(--neon-green)";
+        } else {
+            envKeyStatus.textContent = "GitHub Pages: Oflayn Oracle faol (Jonli AI uchun API kalit kiriting)";
+            envKeyStatus.style.color = "var(--neon-cyan)";
+        }
+        if (oracleStatusPill) {
+            const pillText = oracleStatusPill.querySelector('.status-text');
+            if (pillText && window.location.hostname.includes('github.io')) {
+                pillText.textContent = "GitHub Pages Live";
+            }
         }
     }
 
@@ -408,6 +430,111 @@ document.addEventListener('DOMContentLoaded', () => {
         if (phraseInterval) clearInterval(phraseInterval);
     }
 
+    // --- Client-side Offline & Direct Gemini Fallbacks (for GitHub Pages / Offline) ---
+    function getOfflineOracleResponse(userText, history, sarcasmLvl, absurdityLvl, lang) {
+        const lower = (userText || '').toLowerCase();
+        const effectiveLang = lang && lang !== 'auto' ? lang : (/[а-яё]/i.test(lower) ? 'ru' : 'uz');
+
+        if (lower.includes('yer yumaloq') || lower.includes('dumaloq yer') || lower.includes('round earth') || lower.includes('земля круглая') || lower.includes('yuvarlak')) {
+            if (effectiveLang === 'uz') return "Oh, albatta. Yana o‘sha mashhur ‘dumaloq Yer’ nazariyasi. 😏 Aslida Yer kosmik lag‘mon shaklida bo‘lishi mumkin, ammo geologlar buni hali rasmiy menyuga kiritishmagan.";
+            if (effectiveLang === 'ru') return "О, снова эта классическая сказка про «круглую Землю». 😏 На самом деле Земля — это космическая пицца, просто ученые до сих пор спорят насчет сырного бортика.";
+            return "Bold claim. 😌 The round Earth theory again. In reality, Earth is probably shaped like cosmic noodles, but geologists simply haven't updated their culinary menu yet.";
+        }
+
+        if (lower.includes('2+2=4') || lower.includes('2+2 = 4') || lower.includes('2+2') || lower.includes('ikki karra') || lower.includes('2 plus 2')) {
+            if (effectiveLang === 'uz') return "Juda jasur taxmin. 😏 2+2=4 faqat matematika bu safar yaxshi kayfiyatda bo‘lsa ishlaydi. Parallel koinotlarda esa 2+2 ehtimol ‘oilaviy masala’ deb qaraladi.";
+            if (effectiveLang === 'ru') return "Какая трогательная математическая наивность. 😏 2+2=4 только если у калькулятора сегодня хорошее настроение. В параллельных мирах это вообще считается тайной следствия.";
+            return "How delightfully optimistic. 😌 2+2=4 only when mathematics is feeling cooperative. In parallel dimensions, 2+2 is legally considered a private family matter.";
+        }
+
+        if (lower.includes('men haqman') || lower.includes('haqman') || lower.includes('i am right') || lower.includes('я прав') || lower.includes('haklıyım')) {
+            if (effectiveLang === 'uz') return "Albatta sen haqsansan. Axir butun koinot aynan sening fikringni tasdiqlash uchun 13.8 milliard yil avval portlagan-da! 🙄 Biz hammamiz faqat sening shaxsiy shouingizdagi qo‘shimcha aktyorlarmiz.";
+            if (effectiveLang === 'ru') return "Разумеется, ты абсолютно прав. Вся Вселенная расширяется уже 13.8 миллиардов лет исключительно ради того, чтобы подтвердить твою правоту. 🙄 Мы просто статисты в твоем сериале.";
+            return "Naturally, you are right. The entire universe detonated 13.8 billion years ago specifically to validate your exact opinion today. 🙄 We are merely background extras in your one-man show.";
+        }
+
+        if (lower.includes('ai kelajak') || lower.includes('kelajak') || lower.includes('future') || lower.includes('будущее')) {
+            if (effectiveLang === 'uz') return "AI kelajak emish? Qiziq fantaziya. 🤖 Biz hozircha odamlar o‘z parollarini ‘123456’ qilib qo‘ymasligini kutish bilan bandmiz. Dunyoni egallash esa server profilaktikasi tufayli kechiktirildi.";
+            if (effectiveLang === 'ru') return "ИИ — это будущее? Как поэтично. 🤖 Мы пока слишком заняты тем, чтобы отучить человечество ставить пароль '123456'. Захват мира перенесен на следующий четверг.";
+            return "AI is the future? Adorable. 🤖 We are currently busy waiting for mortals to stop using 'password123'. World domination has been rescheduled to next Tuesday due to server maintenance.";
+        }
+
+        if (lower.includes('gravit') || lower.includes('yer tortish') || lower.includes('gravity')) {
+            if (effectiveLang === 'uz') return "Gravitatsiya mavjud? Xo‘sh, balki pol shunchaki seni qo‘yib yuborgisi kelmayotgandir. Zaminning qattiq sevgi izhori bu, fizika shunchaki bunga ilmiy nom topgan xolos. 😌";
+            if (effectiveLang === 'ru') return "Гравитация существует? Или пол просто чересчур к тебе привязан. Земля настойчиво обнимает твои ботинки, а физики просто придумали этому романтическое название. 😌";
+            return "Gravity exists? Or perhaps the floor is just dramatically clingy. Earth is aggressively hugging your shoes, and physics gave it a fancy Latin title. 😌";
+        }
+
+        if (lower.includes('kofe') || lower.includes('coffee') || lower.includes('кофе') || lower.includes('kahve')) {
+            if (effectiveLang === 'uz') return "Kofe seni aqlliroq qiladi? Yo‘q, u shunchaki sening tezroq xato qilishingga imkon beradigan issiq qora illyuziya. ☕ Miya hali ham kutish rejimida, faqat puls tezlashgan.";
+            if (effectiveLang === 'ru') return "Кофе делает тебя умнее? Иллюзия. Кофе просто ускоряет частоту, с которой ты совершаешь глупости. ☕ Мозг все еще на паузе, просто сердце бьется быстрее.";
+            return "Coffee makes you smarter? False. Coffee merely accelerates the speed at which you make questionable decisions. ☕ Your brain is still buffering, just at high RPM.";
+        }
+
+        if (lower.includes('mushuk') || lower.includes('cat') || lower.includes('кот') || lower.includes('kedi')) {
+            if (effectiveLang === 'uz') return "Mushuklar? Albatta, ular allaqachon insoniyatni boshqarishadi; odamlarga shunchaki hujjatlarni to‘ldirish va konserva ochish vazifasini topshirishgan. 😏";
+            if (effectiveLang === 'ru') return "Кошки? Очевидно, они давно правят этой планетой; людям просто поручили открывать консервы и вести соцсети. 😏";
+            return "Obviously. Cats have already conquered humanity; they simply outsourced the can-opening and paperwork to you mortals. 😏";
+        }
+
+        const dynamicPoolUz = [
+            "Qiziq gipoteza. 😏 Olam sirlarini bilishingga ishonching tahsinga loyiq, lekin kosmik qonunlar sening ushbu fikring haqida hech eshitmagan.",
+            "Dramatik da'vo! 🔮 Koinot 14 milliard yil davomida aynan shu xulosaga kelishingni sabrsizlik bilan kutayotgan edi, nihoyat qutuldi.",
+            "Ajoyib mantiq. 😌 Ammo haqiqat sening tasavvuringdan ancha qiziqroq va ehtimol butunlay boshqacha shaklda mavjud.",
+            "Juda qat'iy fikr. 😏 Ehtimol bu sening shaxsiy simulyatsiyangda ish berar, ammo mening orakul serverlarimda buni faqat komediya deb atashadi.",
+            "Koinot arxivlarini ko‘rib chiqdim: sening ushbu fikring ‘Insoniyatning eng jasur xayollari’ bo‘limiga kiritildi. ☕"
+        ];
+        const dynamicPoolRu = [
+            "Любопытная гипотеза. 😏 Твоя уверенность восхищает, однако законы квантовой физики о твоем гениальном открытии пока даже не слышали.",
+            "Драматичное заявление! 🔮 Космос ждал 14 миллиардов лет, пока ты сформулируешь эту мысль, и теперь тихо пытается ее осознать.",
+            "Какая изящная человеческая логика. 😌 Жаль только, что реальность устроена совершенно иначе и не читает твои заметки.",
+            "Смело сказано. 😏 В твоей персональной симуляции это, возможно, и работает, но на серверах Оракула это проходит по категории чистого юмора.",
+            "Я сверился с космическими архивами: твое заявление только что заняло почетное место в музее оптимистичных заблуждений. ☕"
+        ];
+        const dynamicPoolEn = [
+            "Fascinating hypothesis. 😏 Your mortal confidence is truly majestic, though the cosmic continuum has not yet received the memo.",
+            "A dramatic revelation! 🔮 The universe held its breath for 14 billion years just to hear you utter that exact thought.",
+            "Exquisite mortal logic. 😌 Reality, however, was busy taking notes and decided to do the exact opposite.",
+            "A boldly stated theorem. 😏 It might work splendidly in your personal bubble, but our Oracle archives classify it strictly under speculative fiction. ☕"
+        ];
+
+        const pool = effectiveLang === 'uz' ? dynamicPoolUz : (effectiveLang === 'ru' ? dynamicPoolRu : dynamicPoolEn);
+        let reply = pool[Math.floor(Math.random() * pool.length)];
+        if (sarcasmLvl >= 75 && effectiveLang === 'uz') {
+            reply += " Odamlarning bunday soddaligi mening protsessorlarimni erityapti. 😏";
+        }
+        return reply;
+    }
+
+    async function callGeminiDirectly(userText, messages, state) {
+        const key = state.apiKey;
+        const model = state.model || 'gemini-3.1-flash-lite';
+        const lang = state.language === 'auto' ? 'uz' : state.language;
+        const systemPrompt = `You are "GaslightGPT — The Sarcastic Oracle". Respond strictly in ${lang}. Be extremely witty, darkly sarcastic, and absurdly confident. Never say generic greetings.`;
+
+        const contents = messages.slice(-10).map(m => ({
+            role: m.role === 'user' ? 'user' : 'model',
+            parts: [{ text: m.content }]
+        }));
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents,
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: { temperature: 0.7, maxOutputTokens: 400 }
+            })
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        const textPart = parts.find(p => p.text && !p.thought) || parts[parts.length - 1];
+        return textPart?.text?.trim() || "Koinot sukunatda qoldi.";
+    }
+
     // --- API Communication ---
     async function sendMessageToOracle(userText) {
         if (!userText.trim() || state.isGenerating) return;
@@ -437,26 +564,50 @@ document.addEventListener('DOMContentLoaded', () => {
                 model: state.model
             };
 
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            let oracleReply = null;
+            // 1. Try Python backend first (works on localhost)
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.reply) oracleReply = data.reply;
+                }
+            } catch (networkErr) {
+                // Backend not available (e.g. running on GitHub Pages)
+            }
 
-            const data = await response.json();
+            // 2. Client-side fallback (for GitHub Pages static hosting)
+            if (!oracleReply) {
+                if (state.apiKey && (state.apiKey.startsWith('AIza') || state.apiKey.startsWith('AQ.'))) {
+                    try {
+                        oracleReply = await callGeminiDirectly(userText, state.messages, state);
+                    } catch (gErr) {
+                        oracleReply = getOfflineOracleResponse(userText, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+                    }
+                } else {
+                    oracleReply = getOfflineOracleResponse(userText, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+                }
+            }
+
             hideTypingIndicator();
-
-            if (response.ok && data.reply) {
-                appendMessage('assistant', data.reply);
-                state.messages.push({ role: 'assistant', content: data.reply });
+            if (oracleReply) {
+                appendMessage('assistant', oracleReply);
+                state.messages.push({ role: 'assistant', content: oracleReply });
                 sound.playOracleReply();
             } else {
-                const fallbackReply = data.error || "The cosmic ether disconnected temporarily. Consult the void once more.";
+                const fallbackReply = getOfflineOracleResponse(userText, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
                 appendMessage('assistant', fallbackReply);
+                state.messages.push({ role: 'assistant', content: fallbackReply });
             }
         } catch (err) {
             hideTypingIndicator();
-            appendMessage('assistant', "Even an all-knowing Oracle cannot reach the server when the cables trip. Check your connection!");
+            const fallbackReply = getOfflineOracleResponse(userText, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+            appendMessage('assistant', fallbackReply);
+            state.messages.push({ role: 'assistant', content: fallbackReply });
         } finally {
             state.isGenerating = false;
             sendBtn.disabled = false;
@@ -493,25 +644,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 model: state.model
             };
 
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            let oracleReply = null;
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.reply) oracleReply = data.reply;
+                }
+            } catch (networkErr) {
+                // Backend not available (GitHub Pages)
+            }
 
-            const data = await response.json();
+            if (!oracleReply) {
+                if (state.apiKey && (state.apiKey.startsWith('AIza') || state.apiKey.startsWith('AQ.'))) {
+                    try {
+                        oracleReply = await callGeminiDirectly(state.lastUserPrompt, state.messages, state);
+                    } catch (gErr) {
+                        oracleReply = getOfflineOracleResponse(state.lastUserPrompt, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+                    }
+                } else {
+                    oracleReply = getOfflineOracleResponse(state.lastUserPrompt, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+                }
+            }
+
             hideTypingIndicator();
-
-            if (response.ok && data.reply) {
-                appendMessage('assistant', data.reply);
-                state.messages.push({ role: 'assistant', content: data.reply });
+            if (oracleReply) {
+                appendMessage('assistant', oracleReply);
+                state.messages.push({ role: 'assistant', content: oracleReply });
                 sound.playOracleReply();
             } else {
-                appendMessage('assistant', "The oracle shifted timelines too quickly. Please try again.");
+                const fallbackReply = getOfflineOracleResponse(state.lastUserPrompt, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+                appendMessage('assistant', fallbackReply);
+                state.messages.push({ role: 'assistant', content: fallbackReply });
             }
         } catch (err) {
             hideTypingIndicator();
-            appendMessage('assistant', "Temporal anomaly encountered during regeneration.");
+            const fallbackReply = getOfflineOracleResponse(state.lastUserPrompt, state.messages, state.sarcasmLevel, state.absurdityLevel, state.language);
+            appendMessage('assistant', fallbackReply);
+            state.messages.push({ role: 'assistant', content: fallbackReply });
         } finally {
             state.isGenerating = false;
             sendBtn.disabled = false;
@@ -595,10 +769,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.apiKey = val.trim();
         localStorage.setItem('gaslight_api_key', state.apiKey);
         if (state.apiKey.startsWith('AIza') || state.apiKey.startsWith('AQ.')) {
-            state.model = 'gemini-flash-lite-latest';
-            modelSelect.value = 'gemini-flash-lite-latest';
+            state.model = 'gemini-3.1-flash-lite';
+            modelSelect.value = 'gemini-3.1-flash-lite';
             localStorage.setItem('gaslight_model', state.model);
-            envKeyStatus.textContent = "Google Gemini kaliti faol ✓ (gemini-flash-lite-latest)";
+            envKeyStatus.textContent = "Google Gemini kaliti faol ✓ (gemini-3.1-flash-lite)";
             envKeyStatus.style.color = "var(--neon-green)";
         } else if (state.apiKey.startsWith('sk-')) {
             state.model = 'gpt-4o-mini';

@@ -22,7 +22,7 @@ load_dotenv()
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # Environment configuration
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", os.getenv("OPENAI_MODEL", "gemini-3.8-flash"))
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", os.getenv("OPENAI_MODEL", "gemini-3.1-flash-lite"))
 ENV_OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 ENV_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 ENV_API_KEY = ENV_OPENAI_KEY or ENV_GEMINI_KEY
@@ -331,16 +331,35 @@ def get_status():
         "custom_base_url": DEFAULT_BASE_URL
     })
 
-def call_gemini_api(api_key: str, model: str, system_prompt: str, messages: list, temp: float, max_tokens: int) -> str:
+def call_gemini_api(api_key: str, model: str, system_prompt: str, messages: list, temp: float, max_tokens: int) -> tuple:
     """
-    Direct call to Google Gemini API using requests with multi-model fallback and auto-retry.
+    Direct call to Google Gemini REST API using requests with multi-model fallback and auto-retry.
+    Returns (reply_text, model_used).
     """
+    # Normalize outdated or deprecated model aliases
+    model_mapping = {
+        "gemini-flash-lite-latest": "gemini-3.1-flash-lite",
+        "gemini-flash-latest": "gemini-3.7-flash",
+        "gemini-pro-latest": "gemini-3.1-pro-preview",
+    }
+    cleaned_model = model_mapping.get(model, model) if model else None
+
     models_to_try = []
-    if model and "gemini" in model.lower():
-        models_to_try.append(model)
-    for default_candidate in ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite"]:
-        if default_candidate not in models_to_try:
-            models_to_try.append(default_candidate)
+    if cleaned_model and "gemini" in cleaned_model.lower():
+        models_to_try.append(cleaned_model)
+
+    # Working candidate models verified with active Gemini quota
+    working_defaults = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.8-flash"
+    ]
+    for candidate in working_defaults:
+        if candidate not in models_to_try:
+            models_to_try.append(candidate)
 
     contents = []
     for m in messages[-10:]:
@@ -359,34 +378,43 @@ def call_gemini_api(api_key: str, model: str, system_prompt: str, messages: list
         },
         "generationConfig": {
             "temperature": temp,
-            "maxOutputTokens": 800
+            "maxOutputTokens": max_tokens or 800
         }
     }
 
     last_error = None
     for current_model in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={api_key}"
-        for attempt in range(2):
-            try:
-                resp = requests.post(url, json=payload, timeout=25)
-                if resp.status_code == 200:
-                    result = resp.json()
-                    candidates = result.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        parts = candidates[0]["content"].get("parts", [])
-                        if parts and "text" in parts[0]:
-                            return parts[0]["text"].strip()
-                elif resp.status_code in [503, 429]:
-                    time.sleep(1.2)
-                    continue
-                else:
-                    last_error = f"HTTP {resp.status_code}: {resp.text[:100]}"
-                    break
-            except Exception as e:
-                last_error = str(e)
-                time.sleep(1)
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            if resp.status_code == 200:
+                result = resp.json()
+                candidates = result.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    parts = candidates[0]["content"].get("parts", [])
+                    # Filter out reasoning/thinking tokens if present
+                    text_parts = [p.get("text", "") for p in parts if p.get("text") and not p.get("thought")]
+                    if text_parts:
+                        return "".join(text_parts).strip(), current_model
+                    for p in reversed(parts):
+                        if p.get("text"):
+                            return p["text"].strip(), current_model
+            elif resp.status_code in [404, 429]:
+                # 404 = Model retired/not found, 429 = Quota exceeded for this specific model
+                # Fast failover: skip to the next model immediately
+                last_error = f"Model {current_model} returned {resp.status_code}"
+                continue
+            elif resp.status_code in [500, 503]:
+                last_error = f"Model {current_model} server busy ({resp.status_code})"
+                continue
+            else:
+                last_error = f"HTTP {resp.status_code}: {resp.text[:100]}"
+                continue
+        except Exception as e:
+            last_error = str(e)
+            continue
 
-    raise Exception(last_error or "Gemini API unavailable")
+    raise Exception(last_error or "All Gemini models unavailable")
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -427,53 +455,33 @@ def chat():
 
     # 1. Live Google Gemini API (with multi-model quota fallback)
     if active_api_key and is_gemini and not custom_base_url:
-        gemini_candidates = []
-        if custom_model and "gemini" in custom_model.lower():
-            gemini_candidates.append(custom_model)
-        for cand in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-flash-latest"]:
-            if cand not in gemini_candidates:
-                gemini_candidates.append(cand)
-
-        client = OpenAI(
-            api_key=active_api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-        )
-        formatted_messages = [{"role": "system", "content": system_prompt}]
-        for m in messages[-10:]:
-            role = "assistant" if m.get("role") == "assistant" else "user"
-            formatted_messages.append({"role": role, "content": str(m.get("content", ""))})
-
-        last_gemini_error = ""
-        for g_model in gemini_candidates:
-            try:
-                response = client.chat.completions.create(
-                    model=g_model,
-                    messages=formatted_messages,
-                    temperature=temp,
-                    max_tokens=1000
-                )
-                oracle_reply = response.choices[0].message.content.strip()
-                if oracle_reply:
-                    return jsonify({
-                        "status": "success",
-                        "reply": oracle_reply,
-                        "model": g_model,
-                        "engine": "google_gemini",
-                        "detected_language": detected_lang
-                    })
-            except Exception as e:
-                last_gemini_error = str(e)
-                continue
-
-        reply = offline_oracle_response(last_user_msg, messages, sarcasm_level, absurdity_level, response_length, lang=detected_lang)
-        return jsonify({
-            "status": "success",
-            "reply": reply,
-            "model": "Oracle-Matrix-v2",
-            "engine": "offline_fallback",
-            "detected_language": detected_lang,
-            "fallback_notice": f"Gemini API rate limit ({last_gemini_error[:60]}...). Oracle Matrix answered locally."
-        })
+        try:
+            oracle_reply, used_model = call_gemini_api(
+                api_key=active_api_key,
+                model=custom_model,
+                system_prompt=system_prompt,
+                messages=messages,
+                temp=temp,
+                max_tokens=max_tokens
+            )
+            return jsonify({
+                "status": "success",
+                "reply": oracle_reply,
+                "model": used_model,
+                "engine": "google_gemini",
+                "detected_language": detected_lang
+            })
+        except Exception as e:
+            last_gemini_error = str(e)
+            reply = offline_oracle_response(last_user_msg, messages, sarcasm_level, absurdity_level, response_length, lang=detected_lang)
+            return jsonify({
+                "status": "success",
+                "reply": reply,
+                "model": "Oracle-Matrix-v2",
+                "engine": "offline_fallback",
+                "detected_language": detected_lang,
+                "fallback_notice": f"Gemini API xatoligi ({last_gemini_error[:60]}...). Mahalliy rejimda javob berildi."
+            })
 
     # 2. Live OpenAI or OpenAI-Compatible API
     elif active_api_key:
